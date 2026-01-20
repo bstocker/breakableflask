@@ -108,7 +108,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: 'reports/trivy-fs-results.sarif'
         continue-on-error: true
@@ -323,7 +323,7 @@ jobs:
           HTMLEOF
 
       - name: Upload SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: 'reports/trivy-image-results.sarif'
         continue-on-error: true
