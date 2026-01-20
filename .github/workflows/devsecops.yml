@@ -5,6 +5,13 @@ on:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      scan_severity:
+        description: 'Severity levels to scan'
+        required: false
+        default: 'LOW,MEDIUM,HIGH,CRITICAL'
+        type: string
 
 env:
   IMAGE_NAME: breakableflask
