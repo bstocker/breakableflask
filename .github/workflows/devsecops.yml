@@ -14,11 +14,12 @@ jobs:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'table'
+          output: 'rapport-dependances.txt' # Génère le fichier
           exit-code: '1'
           severity: 'CRITICAL,HIGH'
 
       - name: Upload du rapport de dépendances
-        if: always() # <--- IMPORTANT : S'exécute même si des failles sont trouvées (exit 1)
+        if: always() # S'exécute même si le scan échoue
         uses: actions/upload-artifact@v4
         with:
           name: rapport-trivy-dependances
@@ -36,15 +37,18 @@ jobs:
         with:
           scan-type: 'config'
           scan-ref: '.'
+          format: 'table'
+          output: 'rapport-dockerfile.txt' # Génère le fichier
           exit-code: '1'
           severity: 'CRITICAL,HIGH'
 
       - name: Upload du rapport Dockerfile
-        if: always() # <--- IMPORTANT : S'exécute même si des failles sont trouvées
+        if: always() # S'exécute même si le scan échoue
         uses: actions/upload-artifact@v4
         with:
           name: rapport-trivy-dockerfile
           path: rapport-dockerfile.txt
+
   Deploy:
     runs-on: ubuntu-latest
     needs: Dockerfile
