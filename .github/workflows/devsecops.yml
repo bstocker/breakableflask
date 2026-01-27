@@ -14,7 +14,6 @@ jobs:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'table'
-          # exit-code à 1 mode bloquant
           exit-code: '1'
           severity: 'CRITICAL,HIGH'
   Dockerfile:
