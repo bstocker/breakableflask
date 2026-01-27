@@ -16,6 +16,14 @@ jobs:
           format: 'table'
           exit-code: '1'
           severity: 'CRITICAL,HIGH'
+
+      - name: Upload du rapport de dépendances
+        if: always() # <--- IMPORTANT : S'exécute même si des failles sont trouvées (exit 1)
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-trivy-dependances
+          path: rapport-dependances.txt
+
   Dockerfile:
     runs-on: ubuntu-latest
     needs: Dependances
@@ -30,6 +38,13 @@ jobs:
           scan-ref: '.'
           exit-code: '1'
           severity: 'CRITICAL,HIGH'
+
+      - name: Upload du rapport Dockerfile
+        if: always() # <--- IMPORTANT : S'exécute même si des failles sont trouvées
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-trivy-dockerfile
+          path: rapport-dockerfile.txt
   Deploy:
     runs-on: ubuntu-latest
     needs: Dockerfile
