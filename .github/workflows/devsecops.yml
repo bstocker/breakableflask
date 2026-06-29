@@ -12,21 +12,46 @@ jobs:
           aquasec/trivy:latest fs \
           --file-patterns "pip:.*\.txt" \
           .
-  Dockerfile:
-    runs-on: ubuntu-latest
-    needs: Dependances
-    steps:
-      - name: Test Dockerfile
-        run: |
-          docker run --rm \
+Dockerfile:
+  runs-on: ubuntu-latest
+  needs: Dependances
+
+  steps:
+    - name: Checkout du dépôt
+      uses: actions/checkout@v4
+
+    - name: Créer le Dockerfile dynamiquement
+      run: |
+        cat > Dockerfile.trivy-test <<'EOF'
+        FROM python:3.7
+        WORKDIR /app
+        # Installe tout en root, conserve cache apt/pip
+        RUN apt-get update && apt-get install -y gcc libpq-dev
+        COPY . /app
+        RUN pip install -r requirements.txt
+        EXPOSE 4000
+        CMD ["python", "main.py"]
+        EOF
+
+    - name: Construire l'image Docker
+      run: |
+        docker build -t imgvulne:1.1 -f Dockerfile.trivy-test .
+
+    - name: Scanner l'image avec Trivy
+      run: |
+        docker run --rm \
           -v /var/run/docker.sock:/var/run/docker.sock \
           -v "$HOME/.cache/trivy":/root/.cache/ \
-          aquasec/trivy:latest image --format json --severity HIGH,CRITICAL imgvulne:1.1 \
-          | jq -r '
+          aquasec/trivy:latest image \
+          --format json \
+          --severity HIGH,CRITICAL \
+          imgvulne:1.1 \
+        | jq -r '
           ["TARGET","PACKAGE","INSTALLED","VULN","SEVERITY"],
-          (.Results[]? as $r | $r.Vulnerabilities[]? | [$r.Target, .PkgName, .InstalledVersion, .VulnerabilityID, .Severity]) 
+          (.Results[]? as $r | $r.Vulnerabilities[]? | [$r.Target, .PkgName, .InstalledVersion, .VulnerabilityID, .Severity])
           | @tsv' \
-          | column -t -s $'\t'
+        | column -t -s $'\t'
+  
   Deploy:
     runs-on: ubuntu-latest
     needs: Dockerfile
