@@ -11,6 +11,7 @@ jobs:
           -v "$HOME/.cache/trivy":/root/.cache/ \
           aquasec/trivy:latest fs \
           --file-patterns "pip:.*\.txt" \
+          .
   Dockerfile:
     runs-on: ubuntu-latest
     needs: Dependances
