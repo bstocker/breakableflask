@@ -1,0 +1,57 @@
+name: Automatisation des tests DevSecOps
+on: push
+
+jobs:
+  Dependances:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@v3
+
+      - name: Scan des dépendances
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          output: 'rapport-dependances.txt' # Génère le fichier
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload du rapport de dépendances
+        if: always() # S'exécute même si le scan échoue
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-trivy-dependances
+          path: rapport-dependances.txt
+
+  Dockerfile:
+    runs-on: ubuntu-latest
+    needs: Dependances
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@v3
+
+      - name: Scan du Dockerfile (Trivy Config)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'table'
+          output: 'rapport-dockerfile.txt' # Génère le fichier
+          exit-code: '1'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload du rapport Dockerfile
+        if: always() # S'exécute même si le scan échoue
+        uses: actions/upload-artifact@v4
+        with:
+          name: rapport-trivy-dockerfile
+          path: rapport-dockerfile.txt
+
+  Deploy:
+    runs-on: ubuntu-latest
+    needs: Dockerfile
+    steps:
+      - name: Simulation Déploiement
+        run: echo "Déploiement réussi !"
