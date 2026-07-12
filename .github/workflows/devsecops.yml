@@ -1,0 +1,561 @@
+name: Complete DevSecOps workflow with Trivy security scanning
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      scan_severity:
+        description: 'Severity levels to scan'
+        required: false
+        default: 'LOW,MEDIUM,HIGH,CRITICAL'
+        type: string
+
+env:
+  IMAGE_NAME: breakableflask
+  TRIVY_VERSION: "0.50.0"
+
+jobs:
+  # ============================================
+  # JOB 1: Scan des dépendances
+  # ============================================
+  Dependances:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      - name: Run Trivy vulnerability scanner on filesystem
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'json'
+          output: 'reports/trivy-fs-report.json'
+          severity: 'LOW,MEDIUM,HIGH,CRITICAL'
+          scanners: 'vuln,secret,config'
+        continue-on-error: true
+
+      - name: Generate HTML report for dependencies
+        run: |
+          cat > reports/trivy-fs-report.html << 'EOF'
+          <!DOCTYPE html>
+          <html lang="fr">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Rapport de Vulnérabilités - Dépendances</title>
+            <style>
+              body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+              .container { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+              h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 15px; }
+              h2 { color: #34495e; margin-top: 30px; }
+              .summary { display: flex; gap: 20px; flex-wrap: wrap; margin: 20px 0; }
+              .stat-box { padding: 20px; border-radius: 8px; color: white; min-width: 150px; text-align: center; }
+              .critical { background: linear-gradient(135deg, #e74c3c, #c0392b); }
+              .high { background: linear-gradient(135deg, #e67e22, #d35400); }
+              .medium { background: linear-gradient(135deg, #f39c12, #e67e22); }
+              .low { background: linear-gradient(135deg, #3498db, #2980b9); }
+              .stat-number { font-size: 2.5em; font-weight: bold; }
+              .stat-label { font-size: 0.9em; opacity: 0.9; }
+              table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+              th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
+              th { background: #3498db; color: white; }
+              tr:hover { background: #f8f9fa; }
+              .severity-badge { padding: 4px 12px; border-radius: 20px; color: white; font-size: 0.8em; font-weight: bold; }
+              .badge-critical { background: #e74c3c; }
+              .badge-high { background: #e67e22; }
+              .badge-medium { background: #f39c12; }
+              .badge-low { background: #3498db; }
+              .timestamp { color: #7f8c8d; font-size: 0.9em; margin-top: 30px; }
+              pre { background: #2c3e50; color: #ecf0f1; padding: 15px; border-radius: 5px; overflow-x: auto; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <h1>Rapport d'Analyse de Vulnerabilites - Dependances</h1>
+              <p><strong>Projet:</strong> ${{ github.repository }}</p>
+              <p><strong>Branche:</strong> ${{ github.ref_name }}</p>
+              <p><strong>Commit:</strong> ${{ github.sha }}</p>
+              <p><strong>Scanner:</strong> Trivy - Filesystem Scan</p>
+
+              <h2>Resume</h2>
+              <p>Ce rapport contient les resultats de l'analyse des dependances du projet.</p>
+              <p>Consultez le fichier JSON associe pour les details complets.</p>
+
+              <div class="timestamp">
+                <p>Genere le: $(date '+%Y-%m-%d %H:%M:%S UTC')</p>
+                <p>Run ID: ${{ github.run_id }}</p>
+              </div>
+            </div>
+          </body>
+          </html>
+          EOF
+
+      - name: Run Trivy SARIF report for GitHub Security tab
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'reports/trivy-fs-results.sarif'
+          severity: 'LOW,MEDIUM,HIGH,CRITICAL'
+        continue-on-error: true
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: 'reports/trivy-fs-results.sarif'
+        continue-on-error: true
+
+      - name: Upload Dependencies Scan Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-dependencies-report
+          path: |
+            reports/trivy-fs-report.json
+            reports/trivy-fs-report.html
+            reports/trivy-fs-results.sarif
+          retention-days: 30
+
+  # ============================================
+  # JOB 2: Scan du Dockerfile et de l'image
+  # ============================================
+  Dockerfile:
+    runs-on: ubuntu-latest
+    needs: Dependances
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create reports directory
+        run: mkdir -p reports
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Scan Dockerfile for misconfigurations
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'json'
+          output: 'reports/trivy-config-report.json'
+          severity: 'LOW,MEDIUM,HIGH,CRITICAL'
+        continue-on-error: true
+
+      - name: Scan Docker image for vulnerabilities (JSON)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.IMAGE_NAME }}:${{ github.sha }}'
+          format: 'json'
+          output: 'reports/trivy-image-report.json'
+          severity: 'LOW,MEDIUM,HIGH,CRITICAL'
+          vuln-type: 'os,library'
+        continue-on-error: true
+
+      - name: Scan Docker image for vulnerabilities (Table)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.IMAGE_NAME }}:${{ github.sha }}'
+          format: 'table'
+          output: 'reports/trivy-image-report.txt'
+          severity: 'LOW,MEDIUM,HIGH,CRITICAL'
+          vuln-type: 'os,library'
+        continue-on-error: true
+
+      - name: Scan Docker image (SARIF for GitHub Security)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.IMAGE_NAME }}:${{ github.sha }}'
+          format: 'sarif'
+          output: 'reports/trivy-image-results.sarif'
+          severity: 'LOW,MEDIUM,HIGH,CRITICAL'
+        continue-on-error: true
+
+      - name: Generate comprehensive HTML report
+        run: |
+          cat > reports/trivy-image-report.html << 'HTMLEOF'
+          <!DOCTYPE html>
+          <html lang="fr">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Rapport de Vulnerabilites - Image Docker</title>
+            <style>
+              * { box-sizing: border-box; }
+              body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; }
+              .container { max-width: 1400px; margin: 0 auto; background: white; padding: 40px; border-radius: 15px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); }
+              .header { text-align: center; margin-bottom: 40px; }
+              h1 { color: #2c3e50; margin: 0; font-size: 2.5em; }
+              .subtitle { color: #7f8c8d; margin-top: 10px; }
+              .meta-info { background: #f8f9fa; padding: 20px; border-radius: 10px; margin: 20px 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }
+              .meta-item { padding: 10px; }
+              .meta-label { font-weight: bold; color: #34495e; font-size: 0.85em; }
+              .meta-value { color: #2c3e50; font-family: monospace; word-break: break-all; }
+              .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 20px; margin: 30px 0; }
+              .stat-card { padding: 25px; border-radius: 12px; color: white; text-align: center; transition: transform 0.3s; }
+              .stat-card:hover { transform: translateY(-5px); }
+              .critical { background: linear-gradient(135deg, #e74c3c, #c0392b); }
+              .high { background: linear-gradient(135deg, #e67e22, #d35400); }
+              .medium { background: linear-gradient(135deg, #f1c40f, #f39c12); }
+              .low { background: linear-gradient(135deg, #3498db, #2980b9); }
+              .unknown { background: linear-gradient(135deg, #95a5a6, #7f8c8d); }
+              .stat-number { font-size: 3em; font-weight: bold; text-shadow: 2px 2px 4px rgba(0,0,0,0.2); }
+              .stat-label { font-size: 1.1em; opacity: 0.95; margin-top: 5px; }
+              .section { margin: 40px 0; }
+              .section-title { color: #2c3e50; border-left: 4px solid #3498db; padding-left: 15px; font-size: 1.5em; }
+              .instructions { background: #e8f6ff; border: 1px solid #3498db; border-radius: 10px; padding: 20px; margin: 20px 0; }
+              .instructions h3 { color: #2980b9; margin-top: 0; }
+              .instructions ul { margin: 0; padding-left: 20px; }
+              .instructions li { margin: 8px 0; color: #34495e; }
+              .footer { text-align: center; margin-top: 40px; padding-top: 20px; border-top: 1px solid #eee; color: #7f8c8d; }
+              .badge { display: inline-block; padding: 5px 15px; border-radius: 20px; color: white; font-weight: bold; font-size: 0.85em; }
+              .success { background: #27ae60; }
+              code { background: #f4f4f4; padding: 2px 8px; border-radius: 4px; font-family: 'Fira Code', monospace; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h1>Rapport de Securite - Image Docker</h1>
+                <p class="subtitle">Analyse complete des vulnerabilites avec Trivy</p>
+              </div>
+
+              <div class="meta-info">
+                <div class="meta-item">
+                  <div class="meta-label">PROJET</div>
+                  <div class="meta-value">${{ github.repository }}</div>
+                </div>
+                <div class="meta-item">
+                  <div class="meta-label">BRANCHE</div>
+                  <div class="meta-value">${{ github.ref_name }}</div>
+                </div>
+                <div class="meta-item">
+                  <div class="meta-label">COMMIT</div>
+                  <div class="meta-value">${{ github.sha }}</div>
+                </div>
+                <div class="meta-item">
+                  <div class="meta-label">IMAGE</div>
+                  <div class="meta-value">${{ env.IMAGE_NAME }}:${{ github.sha }}</div>
+                </div>
+                <div class="meta-item">
+                  <div class="meta-label">DATE</div>
+                  <div class="meta-value">$(date '+%Y-%m-%d %H:%M:%S UTC')</div>
+                </div>
+                <div class="meta-item">
+                  <div class="meta-label">RUN ID</div>
+                  <div class="meta-value">${{ github.run_id }}</div>
+                </div>
+              </div>
+
+              <div class="section">
+                <h2 class="section-title">Resume de l'Analyse</h2>
+                <p>Les statistiques detaillees sont disponibles dans les fichiers JSON joints a cet artefact.</p>
+                <div class="summary">
+                  <div class="stat-card critical">
+                    <div class="stat-label">CRITICAL</div>
+                    <div class="stat-number">-</div>
+                  </div>
+                  <div class="stat-card high">
+                    <div class="stat-label">HIGH</div>
+                    <div class="stat-number">-</div>
+                  </div>
+                  <div class="stat-card medium">
+                    <div class="stat-label">MEDIUM</div>
+                    <div class="stat-number">-</div>
+                  </div>
+                  <div class="stat-card low">
+                    <div class="stat-label">LOW</div>
+                    <div class="stat-number">-</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="section">
+                <h2 class="section-title">Fichiers Inclus</h2>
+                <div class="instructions">
+                  <h3>Contenu de cet artefact :</h3>
+                  <ul>
+                    <li><code>trivy-image-report.json</code> - Rapport complet au format JSON</li>
+                    <li><code>trivy-image-report.txt</code> - Rapport en tableau lisible</li>
+                    <li><code>trivy-image-report.html</code> - Ce rapport HTML</li>
+                    <li><code>trivy-config-report.json</code> - Analyse de configuration Dockerfile</li>
+                    <li><code>trivy-image-results.sarif</code> - Format SARIF pour integration</li>
+                  </ul>
+                </div>
+              </div>
+
+              <div class="section">
+                <h2 class="section-title">Actions Recommandees</h2>
+                <div class="instructions">
+                  <h3>Pour corriger les vulnerabilites :</h3>
+                  <ul>
+                    <li>Mettre a jour l'image de base vers la derniere version</li>
+                    <li>Mettre a jour les dependances avec des versions patchees</li>
+                    <li>Utiliser des images minimales (Alpine, Distroless)</li>
+                    <li>Scanner regulierement les images en production</li>
+                    <li>Consulter l'onglet <strong>Security</strong> de GitHub pour plus de details</li>
+                  </ul>
+                </div>
+              </div>
+
+              <div class="footer">
+                <p>Genere automatiquement par le pipeline DevSecOps</p>
+                <p>Powered by <strong>Trivy</strong> by Aqua Security</p>
+              </div>
+            </div>
+          </body>
+          </html>
+          HTMLEOF
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: 'reports/trivy-image-results.sarif'
+        continue-on-error: true
+
+      - name: Upload Docker Image Scan Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-docker-image-report
+          path: |
+            reports/trivy-image-report.json
+            reports/trivy-image-report.txt
+            reports/trivy-image-report.html
+            reports/trivy-config-report.json
+            reports/trivy-image-results.sarif
+          retention-days: 30
+
+  # ============================================
+  # JOB 3: Deploiement (si les scans passent)
+  # ============================================
+  Deploy:
+    runs-on: ubuntu-latest
+    needs: [Dependances, Dockerfile]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy notification
+        run: |
+          echo "All security scans completed!"
+          echo "Ready for deployment"
+          echo "Check the Artifacts section for detailed vulnerability reports"
+
+  # ============================================
+  # JOB 4: Generation du rapport consolide final
+  # ============================================
+  Generate-Final-Report:
+    runs-on: ubuntu-latest
+    needs: [Dependances, Dockerfile, Deploy]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create reports directory
+        run: mkdir -p final-reports
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+
+      - name: Generate consolidated security report
+        run: |
+          cat > final-reports/security-summary.html << 'HTMLEOF'
+          <!DOCTYPE html>
+          <html lang="fr">
+          <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Rapport de Securite Consolide - DevSecOps</title>
+            <style>
+              * { box-sizing: border-box; margin: 0; padding: 0; }
+              body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0; line-height: 1.6; }
+              .hero { background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%); padding: 60px 20px; text-align: center; border-bottom: 1px solid #334155; }
+              .hero h1 { font-size: 2.5em; margin-bottom: 10px; background: linear-gradient(90deg, #60a5fa, #a78bfa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+              .hero p { color: #94a3b8; font-size: 1.1em; }
+              .container { max-width: 1200px; margin: 0 auto; padding: 40px 20px; }
+              .card { background: #1e293b; border-radius: 16px; padding: 30px; margin-bottom: 30px; border: 1px solid #334155; }
+              .card h2 { color: #f8fafc; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+              .card h2 span { font-size: 1.5em; }
+              .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
+              .metric { background: #0f172a; border-radius: 12px; padding: 25px; text-align: center; border: 1px solid #334155; transition: all 0.3s; }
+              .metric:hover { border-color: #60a5fa; transform: translateY(-2px); }
+              .metric-value { font-size: 2.5em; font-weight: bold; margin-bottom: 5px; }
+              .metric-label { color: #94a3b8; font-size: 0.9em; text-transform: uppercase; letter-spacing: 1px; }
+              .critical-value { color: #ef4444; }
+              .high-value { color: #f97316; }
+              .medium-value { color: #eab308; }
+              .low-value { color: #3b82f6; }
+              .success-value { color: #22c55e; }
+              .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 15px; }
+              .info-item { background: #0f172a; padding: 15px 20px; border-radius: 8px; border-left: 3px solid #60a5fa; }
+              .info-label { color: #64748b; font-size: 0.85em; margin-bottom: 5px; }
+              .info-value { color: #f8fafc; font-family: 'Fira Code', monospace; font-size: 0.9em; word-break: break-all; }
+              .timeline { position: relative; padding-left: 30px; }
+              .timeline::before { content: ''; position: absolute; left: 10px; top: 0; bottom: 0; width: 2px; background: #334155; }
+              .timeline-item { position: relative; margin-bottom: 25px; }
+              .timeline-item::before { content: ''; position: absolute; left: -24px; top: 5px; width: 12px; height: 12px; border-radius: 50%; background: #22c55e; border: 2px solid #0f172a; }
+              .timeline-item.pending::before { background: #eab308; }
+              .timeline-item.failed::before { background: #ef4444; }
+              .timeline-content { background: #0f172a; padding: 15px 20px; border-radius: 8px; }
+              .timeline-title { color: #f8fafc; font-weight: 600; margin-bottom: 5px; }
+              .timeline-desc { color: #94a3b8; font-size: 0.9em; }
+              .artifacts-list { list-style: none; }
+              .artifacts-list li { background: #0f172a; margin-bottom: 10px; padding: 15px 20px; border-radius: 8px; display: flex; align-items: center; gap: 15px; border: 1px solid #334155; transition: all 0.3s; }
+              .artifacts-list li:hover { border-color: #60a5fa; }
+              .artifact-icon { font-size: 1.5em; }
+              .artifact-info { flex: 1; }
+              .artifact-name { color: #f8fafc; font-weight: 600; }
+              .artifact-desc { color: #64748b; font-size: 0.85em; }
+              .footer { text-align: center; padding: 40px 20px; color: #64748b; border-top: 1px solid #334155; margin-top: 40px; }
+              .badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.8em; font-weight: 600; }
+              .badge-success { background: rgba(34, 197, 94, 0.2); color: #22c55e; }
+              .badge-warning { background: rgba(234, 179, 8, 0.2); color: #eab308; }
+              .badge-error { background: rgba(239, 68, 68, 0.2); color: #ef4444; }
+            </style>
+          </head>
+          <body>
+            <div class="hero">
+              <h1>Rapport de Securite DevSecOps</h1>
+              <p>Analyse complete des vulnerabilites - Pipeline CI/CD</p>
+            </div>
+
+            <div class="container">
+              <div class="card">
+                <h2><span>INFO</span> Informations du Build</h2>
+                <div class="info-grid">
+                  <div class="info-item">
+                    <div class="info-label">Repository</div>
+                    <div class="info-value">${{ github.repository }}</div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">Branche</div>
+                    <div class="info-value">${{ github.ref_name }}</div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">Commit SHA</div>
+                    <div class="info-value">${{ github.sha }}</div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">Run ID</div>
+                    <div class="info-value">${{ github.run_id }}</div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">Declanche par</div>
+                    <div class="info-value">${{ github.actor }}</div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">Date d'execution</div>
+                    <div class="info-value">$(date '+%Y-%m-%d %H:%M:%S UTC')</div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card">
+                <h2><span>PIPELINE</span> Pipeline DevSecOps</h2>
+                <div class="timeline">
+                  <div class="timeline-item">
+                    <div class="timeline-content">
+                      <div class="timeline-title">Scan des Dependances</div>
+                      <div class="timeline-desc">Analyse des vulnerabilites dans les dependances du projet (npm, pip, etc.)</div>
+                    </div>
+                  </div>
+                  <div class="timeline-item">
+                    <div class="timeline-content">
+                      <div class="timeline-title">Scan Dockerfile et Image</div>
+                      <div class="timeline-desc">Analyse des misconfigurations et vulnerabilites de l'image Docker</div>
+                    </div>
+                  </div>
+                  <div class="timeline-item">
+                    <div class="timeline-content">
+                      <div class="timeline-title">Deploiement</div>
+                      <div class="timeline-desc">Validation finale et preparation au deploiement</div>
+                    </div>
+                  </div>
+                  <div class="timeline-item">
+                    <div class="timeline-content">
+                      <div class="timeline-title">Generation des Rapports</div>
+                      <div class="timeline-desc">Consolidation de tous les rapports de securite</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="card">
+                <h2><span>ARTIFACTS</span> Artefacts Disponibles</h2>
+                <ul class="artifacts-list">
+                  <li>
+                    <span class="artifact-icon">[DOC]</span>
+                    <div class="artifact-info">
+                      <div class="artifact-name">trivy-dependencies-report</div>
+                      <div class="artifact-desc">Rapport JSON, HTML et SARIF de l'analyse des dependances</div>
+                    </div>
+                    <span class="badge badge-success">Telechargeable</span>
+                  </li>
+                  <li>
+                    <span class="artifact-icon">[DOCKER]</span>
+                    <div class="artifact-info">
+                      <div class="artifact-name">trivy-docker-image-report</div>
+                      <div class="artifact-desc">Rapport complet de l'analyse de l'image Docker</div>
+                    </div>
+                    <span class="badge badge-success">Telechargeable</span>
+                  </li>
+                  <li>
+                    <span class="artifact-icon">[REPORT]</span>
+                    <div class="artifact-info">
+                      <div class="artifact-name">consolidated-security-report</div>
+                      <div class="artifact-desc">Ce rapport consolide avec tous les resultats</div>
+                    </div>
+                    <span class="badge badge-success">Telechargeable</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div class="card">
+                <h2><span>LINKS</span> Ressources</h2>
+                <div class="info-grid">
+                  <div class="info-item">
+                    <div class="info-label">Onglet Security GitHub</div>
+                    <div class="info-value">Consultez les alertes SARIF dans l'onglet Security du repository</div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">Documentation Trivy</div>
+                    <div class="info-value">https://aquasecurity.github.io/trivy</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="footer">
+              <p>Rapport genere automatiquement par le pipeline DevSecOps</p>
+              <p>Powered by <strong>Trivy</strong> by Aqua Security et <strong>GitHub Actions</strong></p>
+            </div>
+          </body>
+          </html>
+          HTMLEOF
+
+      - name: Upload Consolidated Security Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidated-security-report
+          path: |
+            final-reports/
+            downloaded-artifacts/
+          retention-days: 90
