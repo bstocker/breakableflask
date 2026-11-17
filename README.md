@@ -51,3 +51,30 @@ On launch breakableflask will attempt to populate the database server with the n
 If you are using an Oracle database, you need to provide the location of the Oracle client libraries (as installed with the Oracle instant Client or full database) using the `oracle_lib_dir` option.
 
 Given that one of the reasons for this programs existence is to provide a test bed that is as easy as possible to run, there are included instructions in `docker_database_setup.md` file that will help you easily start up an instance of the various supported database types in Docker. 
+
+## Running the hardened Docker image
+
+The repository includes a multi-stage [Dockerfile](./Dockerfile). It keeps build tooling out of the runtime image, disables package caches, and runs the application as the unprivileged `appuser` user.
+
+Build and run it with:
+
+    docker build -t breakableflask:local .
+    docker run --rm -p 4000:4000 breakableflask:local
+
+The application is available at `http://127.0.0.1:4000`. The image also defines a health check for this endpoint.
+
+## DevSecOps checks
+
+The [DevSecOps workflow](./.github/workflows/devsecops.yml) runs on pushes and pull requests. It:
+
+1. scans `requirements.txt` with Trivy for HIGH and CRITICAL vulnerabilities;
+2. scans the Dockerfile configuration;
+3. builds the image and scans it for HIGH and CRITICAL vulnerabilities;
+4. allows the final deployment stage only when the previous checks pass.
+
+To run equivalent local checks, install Trivy and use:
+
+    trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 requirements.txt
+    trivy config --severity HIGH,CRITICAL --exit-code 1 Dockerfile
+    docker build -t breakableflask:local .
+    trivy image --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 breakableflask:local
